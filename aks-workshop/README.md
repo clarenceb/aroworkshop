@@ -362,8 +362,90 @@ npx playwright test --headed   # Or via launching a browser
 Store Helm charts as artifacts in ACR
 -------------------------------------
 
+Package and store Ratings API helm chart in ACR:
+
+```sh
+cd rating-api/
+helm package rating-api
+
+# See other ways to authenicate: https://docs.microsoft.com/en-us/azure/container-registry/container-registry-helm-repos#authenticate-with-the-registry
+USER_NAME="00000000-0000-0000-0000-000000000000"
+PASSWORD=$(az acr login --name $ACR_NAME --expose-token --output tsv --query accessToken)
+
+helm registry login $ACR_NAME.azurecr.io --username $USER_NAME --password $PASSWORD
+helm push rating-api-0.1.0.tgz oci://$ACR_NAME.azurecr.io/helm
+az acr repository show --name $ACR_NAME --repository helm/rating-api
+az acr manifest list-metadata --registry $ACR_NAME --name helm/rating-api
+```
+
+Package and store Ratings Web helm chart in ACR:
+
+```sh
+cd rating-web/
+helm package rating-web
+
+# See other ways to authenicate: https://docs.microsoft.com/en-us/azure/container-registry/container-registry-helm-repos#authenticate-with-the-registry
+USER_NAME="00000000-0000-0000-0000-000000000000"
+PASSWORD=$(az acr login --name $ACR_NAME --expose-token --output tsv --query accessToken)
+
+helm registry login $ACR_NAME.azurecr.io --username $USER_NAME --password $PASSWORD
+helm push rating-web-0.1.0.tgz oci://$ACR_NAME.azurecr.io/helm
+az acr repository show --name $ACR_NAME --repository helm/rating-web
+az acr manifest list-metadata --registry $ACR_NAME --name helm/rating-web
+```
+
 Deploy from Helm charts stored in ACR
 -------------------------------------
+
+```sh
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-api"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-api"
+IMAGE_TAG="v1"
+
+# Render a preview of the Helm chart as YAML
+helm template rating-api ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.database_uri="${MONGODB_URI}"
+
+# Install the Helm chart
+helm upgrade --install rating-api ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.database_uri="${MONGODB_URI}"
+
+helm ls --namespace ${NAMESPACE}
+helm get manifest rating-api -n ${NAMESPACE}
+
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-web"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-web"
+IMAGE_TAG="v1"
+
+# Render a preview of the Helm chart as YAML
+helm template rating-web ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.ratings_api_uri="${RATING_API_URI}"
+
+# Install the Helm chart
+helm upgrade --install rating-web ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.ratings_api_uri="${RATING_API_URI}"
+
+helm ls --namespace ${NAMESPACE}
+helm get manifest rating-api -n ${NAMESPACE}
+```
 
 References
 ----------
