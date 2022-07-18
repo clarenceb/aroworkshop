@@ -592,6 +592,108 @@ helm upgrade --install rating-web ${CHART_REPOSITORY} \
     --set env.ratings_api_uri="${RATING_API_URI}"
 ```
 
+Azure Monitor
+-------------
+
+Ensure Monitoring addon is enabled in AKS.
+
+Enter a few votes in the Ratings Web app.
+
+Investigate "Insights" blade:
+
+* Cluster
+* Reports
+* Nodes
+* Controllers
+* Containers
+  * Live Logs / Events (for Ratings API)
+* Recommended Alerts
+
+Open the KQL query editor in the "Logs" blade of the AKS resource and try some queries.
+
+Investigate some app logs where votes were placed:
+
+```kql
+ContainerLog
+| where LogEntry contains "Saving rating"
+```
+
+See average rating per fruit:
+
+```kql
+ContainerLog
+| where LogEntry contains "Saving rating"
+| parse LogEntry with * "itemRated: [ " itemCode " ]" * "rating: " rating " }" *
+| extend fruit=
+    replace_string(
+        replace_string(
+            replace_string(
+                replace_string(itemCode, '62d4e1eee463c40010474b70', 'Banana'),
+            '62d4e1eee463c40010474b71', 'Coconut'),
+        '62d4e1eee463c40010474b72', 'Oranges'),
+    '62d4e1eee463c40010474b73', 'Pineapple')
+| project fruit, rating
+| summarize AvgRating=avg(toint(rating)) by fruit
+```
+
+Choose "Chart" to see a visualisation of the average votes.
+
+Note: Your item ids will be different.  Run a Mongo query to find your ids, like so:
+
+```sh
+kubectl port-forward --namespace ratingsapp-dev svc/mongodb 27017:27017 &
+mongosh --host 127.0.0.1 --authenticationDatabase admin -u root -p $MONGODB_ROOT_PASSWORD
+
+use ratingsdb
+db.items.find()
+quit
+
+kill %1
+```
+
+See number of votes submitted over time:
+
+```sh
+ContainerLog
+| where LogEntry contains "Saving rating"
+| summarize NumberOfVotes=count()/4 by bin(TimeGenerated, 15m)
+| render areachart
+```
+
+Some cluster-level logs:
+
+See deleted objects (e.g. delete some pods):
+
+```kql
+AzureDiagnostics
+| where Category == 'kube-audit'
+| extend log=parse_json(log_s)
+| where log.verb == 'delete'
+| where log.objectRef.resource == 'pods'
+| project requestURI=log.requestURI, user=log.user.username, verb=log.verb
+| limit 100
+```
+
+Kube event failures:
+
+```kql
+KubeEvents
+| where TimeGenerated > ago(24h)
+| where Reason in ("Failed")
+| summarize count() by Reason, bin(TimeGenerated, 5m)
+| render areachart
+```
+
+Pod failures (e.g. ImagePullBackOff):
+
+```kql
+KubeEvents
+| where TimeGenerated > ago(24h)
+| where Reason in ("Failed")
+| where ObjectKind == "Pod"
+| project TimeGenerated, ObjectKind, Name, Namespace, Message
+```
+
 References
 ----------
 
