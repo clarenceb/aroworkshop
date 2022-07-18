@@ -80,45 +80,14 @@ az group create \
     --name $RESOURCE_GROUP \
     --location $REGION_NAME
 
-# Create a default network security group
-az network nsg create -g $RESOURCE_GROUP -n $NSG_NAME
-
-# Create the VNET for AKS to use with Azure CNI networking
-az network vnet create \
-    --resource-group $RESOURCE_GROUP \
-    --location $REGION_NAME \
-    --name $VNET_NAME \
-    --address-prefixes $VNET_CIDR \
-    --subnet-name $SUBNET_NAME \
-    --subnet-prefixes $AKS_SUBNET_CIDR \
-    --nsg $NSG_NAME
-
-# Allocate a subnet for AKS nodes and pods to use
-SUBNET_ID=$(az network vnet subnet show \
-    --resource-group $RESOURCE_GROUP \
-    --vnet-name $VNET_NAME \
-    --name $SUBNET_NAME \
-    --query id -o tsv)
-
-# Get the latest AKS version available for our chosen region
-VERSION=$(az aks get-versions \
-    --location $REGION_NAME \
-    --query 'orchestrators[?!isPreview] | [-1].orchestratorVersion' \
-    --output tsv)
-
 # Create the AKS cluster
 az aks create \
 --resource-group $RESOURCE_GROUP \
 --name $AKS_CLUSTER_NAME \
 --node-count $NODE_COUNT \
 --location $REGION_NAME \
---kubernetes-version $VERSION \
 --network-plugin azure \
 --network-policy azure \
---vnet-subnet-id $SUBNET_ID \
---service-cidr $SERVICE_CIDR \
---dns-service-ip $DNS_IP \
---docker-bridge-address $DOCKER_BRIDGE_CIDR \
 --enable-addons $ADD_ONS \
 --enable-managed-identity \
 --generate-ssh-keys
@@ -194,6 +163,7 @@ Deploy MongoDB (in-cluster)
 ```sh
 helm install mongodb bitnami/mongodb \
     --namespace ratingsapp-dev \
+    --create-namespace \
     --set persistence.enabled=true \
     --set auth.usernames={ratingsuser}  \
     --set auth.password=ratingspassword \
@@ -444,8 +414,85 @@ helm upgrade --install rating-web ${CHART_REPOSITORY} \
     --set env.ratings_api_uri="${RATING_API_URI}"
 
 helm ls --namespace ${NAMESPACE}
-helm get manifest rating-api -n ${NAMESPACE}
+helm get manifest rating-web -n ${NAMESPACE}
 ```
+
+Install Ingress Controller
+--------------------------
+
+```sh
+NGINX_CHART_VERSION=4.1.3
+
+helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
+  --namespace $NAMESPACE \
+  --create-namespace \
+  --version $NGINX_CHART_VERSION \
+  --set controller.nodeSelector."kubernetes\.io/os"=linux \
+  --set controller.admissionWebhooks.patch.nodeSelector."kubernetes\.io/os"=linux \
+  --set defaultBackend.nodeSelector."kubernetes\.io/os"=linux \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
+  --set controller.replicaCount=2 \
+  --set controller.nodeSelector."kubernetes\.io/os"=linux \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-dns-label-name"=$DNS_LABEL
+
+EXTERNAL_IP=$(kubectl --namespace ingress-basic get services nginx-ingress-ingress-nginx-controller -o jsonpath="{.status.loadBalancer.ingress[0].ip}")
+
+# Get the resource-id of the public ip
+PUBLICIPID=$(az network public-ip list --query "[?ipAddress!=null]|[?contains(ipAddress, '$EXTERNAL_IP')].[id]" --output tsv)
+
+# Display the FQDN
+INGRESS_FQDN=$(az network public-ip show --ids $PUBLICIPID --query "[dnsSettings.fqdn]" --output tsv)
+
+echo "NGINX Ingress - DNS FQDN (External IP): $INGRESS_FQDN ($EXTERNAL_IP)"
+```
+
+Deploy Rating api and web with an ingress resources:
+
+```sh
+
+NAMESPACE=ratingsapp-dev
+RATING_API_URI="http://rating-api:8080"
+MONGODB_USER=ratingsuser
+MONGODB_PASSWORD=ratingspassword
+MONGODB_URI="mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@mongodb.${NAMESPACE}.svc.cluster.local:27017/ratingsdb"
+
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-api"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-api"
+IMAGE_TAG="v1"
+
+helm upgrade --install rating-api ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.database_uri="${MONGODB_URI}" \
+    --set ingress.enabled=true \
+    --set "ingress.hosts[0].host=$INGRESS_FQDN,ingress.hosts[0].paths[0].pathType=Prefix,ingress.hosts[0].paths[0].path=/api" \
+    --set ingress.className=nginx
+
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-web"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-web"
+IMAGE_TAG="v1"
+
+helm upgrade --install rating-web ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    --version ${CHART_VERSION} \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.ratings_api_uri="${RATING_API_URI}" \
+    --set ingress.enabled=true \
+    --set "ingress.hosts[0].host=$INGRESS_FQDN,ingress.hosts[0].paths[0].pathType=Prefix,ingress.hosts[0].paths[0].path=/" \
+    --set ingress.className=nginx
+```
+
+Access the ratings web site at: `http://$INGRESS_FQDN`
+
+Configure TLS on Ingress
+------------------------
 
 References
 ----------
