@@ -449,7 +449,6 @@ echo "NGINX Ingress - DNS FQDN (External IP): $INGRESS_FQDN ($EXTERNAL_IP)"
 Deploy Rating api and web with an ingress resources:
 
 ```sh
-
 NAMESPACE=ratingsapp-dev
 RATING_API_URI="http://rating-api:8080"
 MONGODB_USER=ratingsuser
@@ -493,6 +492,105 @@ Access the ratings web site at: `http://$INGRESS_FQDN`
 
 Configure TLS on Ingress
 ------------------------
+
+Install Cert-Manager:
+
+```sh
+kubectl label namespace ingress-basic cert-manager.io/disable-validation=true
+
+# See: https://artifacthub.io/packages/helm/cert-manager/cert-manager
+CERT_MANAGER_TAG="v1.8.2"
+
+helm install cert-manager jetstack/cert-manager \
+  --namespace ingress-basic \
+  --version $CERT_MANAGER_TAG \
+  --set installCRDs=true \
+  --set nodeSelector."kubernetes\.io/os"=linux
+```
+
+Create the CA cluster issuer:
+
+```sh
+export EMAIL_ADDRESS="<your-email-address>"
+envsubst < ./ca-issuer.yaml | kubectl apply -n ingress-basic -f -
+
+kubectl get ClusterIssuer -A
+kubectl describe ClusterIssuer letsencrypt -n ingress-basic
+```
+
+Install/Update Ratings API to use Lets Encrypt TLS certificate:
+
+```sh
+NAMESPACE=ratingsapp-dev
+RATING_API_URI="http://rating-api:8080"
+MONGODB_USER=ratingsuser
+MONGODB_PASSWORD=ratingspassword
+MONGODB_URI="mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@mongodb.${NAMESPACE}.svc.cluster.local:27017/ratingsdb"
+
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-api"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-api"
+IMAGE_TAG="v1"
+
+cat << EOF > rating-api-values.yaml
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: $INGRESS_FQDN
+      paths:
+        - path: /api
+          pathType: Prefix
+  tls:
+    - secretName: rating-api-tls
+      hosts:
+        - $INGRESS_FQDN
+EOF
+
+helm upgrade --install rating-api ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    --version ${CHART_VERSION} \
+    --values ./rating-api-values.yaml \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.database_uri="${MONGODB_URI}"
+
+kubectl describe ClusterIssuer letsencrypt -n ingress-basic
+
+cat << EOF > rating-web-values.yaml
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: $INGRESS_FQDN
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rating-api-tls
+      hosts:
+        - $INGRESS_FQDN
+EOF
+
+CHART_REPOSITORY="oci://$ACR_NAME.azurecr.io/helm/rating-web"
+CHART_VERSION="0.1.0"
+IMAGE_REPOSITORY="${ACR_NAME}.azurecr.io/ratings-web"
+IMAGE_TAG="v1"
+
+helm upgrade --install rating-web ${CHART_REPOSITORY} \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    --version ${CHART_VERSION} \
+    --values ./rating-web-values.yaml \
+    --set image.repository="${IMAGE_REPOSITORY}" \
+    --set image.tag="${IMAGE_TAG}" \
+    --set env.ratings_api_uri="${RATING_API_URI}"
+```
 
 References
 ----------
