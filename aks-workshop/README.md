@@ -694,6 +694,8 @@ KubeEvents
 | project TimeGenerated, ObjectKind, Name, Namespace, Message
 ```
 
+Try some other KQL queries in [kql-container-insights.md](./kql-container-insights.md)
+
 References
 ----------
 
