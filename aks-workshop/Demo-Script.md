@@ -4,6 +4,8 @@ Demo Script
 Show the running app already deployed to AKS
 --------------------------------------------
 
+Go to ingresses in Azure portal AKS resource view, or:
+
 ```sh
 kubectl get ingress rating-web -n ratingsapp-dev
 
@@ -60,7 +62,7 @@ body {
 Build the container image:
 
 ```sh
-docker build -t rating-api -f Dockerfile.k8s .
+cd rating-web/
 docker build -t rating-web -f Dockerfile .
 ```
 
@@ -80,7 +82,7 @@ Submit some votes.
 
 Open local MongoDB in MongoDB Compass.
 
-Optional: Run OPlaywright tests
+Optional: Run Playwright tests
 
 ```sh
 cd test/
@@ -168,14 +170,16 @@ helm upgrade --install rating-web ${CHART_REPOSITORY} \
 helm ls -A
 ```
 
-Show desired state and pod replicas 
+Show desired state and pod replicas
 -----------------------------------
 
-Whilst the watch is going in the other terminal, select the rating-web pod name and kill it (see ContainerCreating for new one).
+Whilst the watch is going in the other terminal:
 
-Quickly test the app in the browser and you get a 503 error. Try again after a while and it works.
+* Select the rating-web pod name and kill it (see ContainerCreating for new one).
+* Quickly test the app in the browser and you get a 503 error.
+* Try again after a while and it works.
 
-Show helm values file (`rating-web/values.yaml`) replicaCount, change this to 3:
+Show helm values file (`rating-web/values.yaml`) replicaCount, change this to 3 via `--set replicaCount=3`:
 
 ```sh
 helm upgrade --install rating-web ${CHART_REPOSITORY} \
